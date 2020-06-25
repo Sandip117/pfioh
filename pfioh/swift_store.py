@@ -32,13 +32,34 @@ class SwiftStore(StoreHandler):
         options = {
             'auth_version':         3,
             'os_auth_url':          config['AUTHORIZATION']['osAuthUrl'],
+            'identity_provider':    config['PROJECT']['identityProvider'],
+            'protocol':             config['PROJECT']['protocol'],
             'os_username':          config['AUTHORIZATION']['username'],
             'os_password':          config['AUTHORIZATION']['password'],
             'os_project_domain_name':    config['PROJECT']['osProjectDomain'],
-            'os_project_name':      config['PROJECT']['osProjectName']
+            'os_project_name':      config['PROJECT']['osProjectName'],
+            'client_id':            config['SECRET']['clientId'],
+            'client_secret':        config['SECRET']['clientSecret'],
+            'access_token_endpoint':     config['ENDPOINT']['accessTokenEndpoint'],
+            'discovery_endpoint':        config['ENDPOINT']['discoveryEndpoint']
         }
 
-        service = swift_service.SwiftService(options)
+        auth_swift = v3.oidc.OidcPassword(
+            options['os_auth_url'],
+            identity_provider=options['identity_provider'],
+            protocol=options['protocol'],
+            client_id=options['client_id'],
+            client_secret=options['client_secret'],
+            access_token_endpoint=options['access_token_endpoint'],
+            discovery_endpoint=options['discovery_endpoint'],
+            username=options['os_username'],
+            password=options['os_password'],
+            project_name=options['os_project_name'],
+            project_domain_name=options['os_project_domain_name']
+        )
+
+        session_client = session.Session(auth=auth_swift)
+        service = swift_service.Connection(session=session_client)
         return service
 
     def storeData(self, **kwargs):
@@ -72,21 +93,40 @@ class SwiftStore(StoreHandler):
                     break
                 f.write(chunk)
             f.close()
+
+        zip_file_contents = open('/tmp/{}.zip'.format(key), mode='rb')
+
         try:
             success = True
-            uploadObject = swift_service.SwiftUploadObject('/tmp/{}.zip'.format(key), object_name="input/data")
-            uploadResultsGenerator = swiftService.upload(str_containerName, [uploadObject])
-            # generates dicts containing the results of the upload
-            for res in uploadResultsGenerator:
-                print("Upload results generated")
-                if not res["success"]:
-                    success = False
-                pp.pprint(res)
+            filePath = "input/data"
+
+            resp_headers, containers = swiftService.get_account()
+            listContainers = [d['name'] for d in containers if 'name' in d]
+
+            if str_containerName not in listContainers:
+                swiftService.put_container(str_containerName)
+                resp_headers, containers = swiftService.get_account()
+                listContainers = [d['name'] for d in containers if 'name' in d]
+                if str_containerName in listContainers:
+                    print("The container was created successfully")
+                else:
+                    raise Exception("The container was not created successfully")
+
+            swiftService.put_object(
+                str_containerName,
+                filePath,
+                contents=zip_file_contents,
+                content_type='application/zip'
+            )
+            zip_file_contents.close()
+
+            # Confirm presence of the object in swift
+            response_headers = swiftService.head_object(str_containerName, filePath)
+            print('The upload was successful')
         except Exception as err:
             print(err)
             success = False
 
-        
         #Headers 
         if success:
             d_ret['status'] = True
@@ -119,25 +159,30 @@ class SwiftStore(StoreHandler):
         key = "output/data"
         success = True
             
-        downloadResultsGenerator = swiftService.download(containerName, [key], {'out_file': '/tmp/incomingData.zip'})
-        # generates dicts containing the results of the download
-        for res in downloadResultsGenerator:
-            print("Download results generated",flush=True)
-            if not res['success']:
-                success = False
-            pp.pprint(res)
+        response_headers, object_contents = swiftService.get_object(containerName, key)
+
+        # Download the object
+        try:
+            downloaded_file = open('/tmp/incomingData.zip', mode='wb')
+            downloaded_file.write(object_contents)
+            downloaded_file.close()
+            print("Download results generated", flush=True)
+        except Exception as e:
+            success = False
+            pp.pprint(e)
+
         if success:
             print("Download successful")
             if b_delete:
-                for res in swiftService.delete(containerName, [key]):
-                    print("Delete results generated")
-                    if not res['success']:
-                        success = False
-                    pp.pprint(res)
+                try:
+                    swiftService.delete_object(containerName, key)
+                except Exception as e:
+                    success = False
+                    pp.pprint(e)
                 if success:
-                    print('Deleted object with key %s' %key)
-            else:
-                print("Deletion unsuccessful")
+                    print('Deleted object with key %s' % key)
+                else:
+                    print("Deletion unsuccessful")
         else:
             print("Download unsuccessful")
 

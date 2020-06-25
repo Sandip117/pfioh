@@ -72,7 +72,17 @@ The credentials file for Swift should be stored in a **secret**, mounted at /etc
 
     [PROJECT]
     osProjectDomain  = 
-    osProjectName    = 
+    osProjectName    =
+    identityProvider =
+    protocol         =
+
+    [SECRET]
+    clientId      =
+    clientSecret  =
+
+    [ENDPOINT]
+    accessTokenEndpoint  =
+    discoveryEndpoint    =
 
 **************
 Creating a secret and running pfioh.
